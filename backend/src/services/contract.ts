@@ -39,15 +39,34 @@ export async function registerOnChain(
   sourceName: string,
   editHistory: string
 ): Promise<RegisterResult> {
-  const tx = await mediaRegistry.registerMedia(hash, sourceName, editHistory);
-  const receipt = await tx.wait();
+  try {
+    const tx = await mediaRegistry.registerMedia(hash, sourceName, editHistory);
+    const receipt = await tx.wait();
 
-  return {
-    txHash: receipt.hash,
-    hash,
-    sourceName,
-    editHistory,
-  };
+    return {
+      txHash: receipt.hash,
+      hash,
+      sourceName,
+      editHistory,
+    };
+  } catch (error: any) {
+    let decoded = null;
+    if (error.data) {
+      try {
+        decoded = mediaRegistry.interface.parseError(error.data);
+      } catch {
+        decoded = null;
+      }
+    }
+
+    if (decoded?.name === "AlreadyRegistered") {
+      const alreadyRegisteredError = new Error("This exact file is already registered");
+      alreadyRegisteredError.name = "AlreadyRegisteredError";
+      throw alreadyRegisteredError;
+    }
+
+    throw error;
+  }
 }
 
 export async function verifyOnChain(hash: string): Promise<VerifyResult> {
