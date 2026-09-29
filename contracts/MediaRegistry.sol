@@ -5,6 +5,8 @@ pragma solidity ^0.8.24;
 /// @notice Anchors a cryptographic fingerprint (hash) of a piece of media on-chain,
 /// along with publisher identity, timestamp, and edit history, so that anyone can
 /// later verify whether a given file matches the originally registered version.
+/// Also supports registering a new version of an existing work, linked back to its
+/// parent hash, so a creator can build a real, verifiable version history over time.
 
 contract MediaRegistry {
     struct MediaRecord {
@@ -13,12 +15,10 @@ contract MediaRegistry {
         string sourceName;
         uint256 timestamp;
         string editHistory;
+        bytes32 parentHash; // 0x0 for an original/first registration
         bool exists;
     }
 
-    /// @dev hash => record. A hash can only ever be registered once —
-    /// this is what prevents any single party (including the publisher
-    /// themselves) from quietly rewriting history after the fact.
     mapping(bytes32 => MediaRecord) private records;
 
     event MediaRegistered(
@@ -28,13 +28,17 @@ contract MediaRegistry {
         uint256 timestamp
     );
 
-    error AlreadyRegistered(bytes32 hash);
+    event MediaVersionRegistered(
+        bytes32 indexed hash,
+        bytes32 indexed parentHash,
+        address indexed publisher,
+        uint256 timestamp
+    );
 
-    /// @notice Registers a new media fingerprint on-chain.
-    /// @param hash The SHA-256 (or keccak256) fingerprint of the media file.
-    /// @param sourceName Human-readable publisher/source name (e.g. "Reuters").
-    /// @param editHistory Optional free-text note (e.g. "original upload", "v2 - cropped").
-    
+    error AlreadyRegistered(bytes32 hash);
+    error ParentNotFound(bytes32 parentHash);
+    error NotParentPublisher(bytes32 parentHash, address caller);
+
     function registerMedia(
         bytes32 hash,
         string calldata sourceName,
@@ -50,20 +54,44 @@ contract MediaRegistry {
             sourceName: sourceName,
             timestamp: block.timestamp,
             editHistory: editHistory,
+            parentHash: bytes32(0),
             exists: true
         });
 
         emit MediaRegistered(hash, msg.sender, sourceName, block.timestamp);
     }
 
-    /// @notice Checks whether a given hash matches a registered, authentic record.
-    /// @param hash The fingerprint to look up (computed from a file you want to verify).
-    /// @return exists Whether this exact hash was ever registered.
-    /// @return publisher The address that registered it (address(0) if not found).
-    /// @return sourceName The publisher's declared name.
-    /// @return timestamp When it was registered (0 if not found).
-    /// @return editHistory The declared edit history string.
-    
+    /// @notice Registers a new version of an existing, already-registered work.
+    /// Only the original work's publisher may add a new version to it.
+    function registerVersion(
+        bytes32 parentHash,
+        bytes32 newHash,
+        string calldata sourceName,
+        string calldata versionNote
+    ) external {
+        if (!records[parentHash].exists) {
+            revert ParentNotFound(parentHash);
+        }
+        if (records[parentHash].publisher != msg.sender) {
+            revert NotParentPublisher(parentHash, msg.sender);
+        }
+        if (records[newHash].exists) {
+            revert AlreadyRegistered(newHash);
+        }
+
+        records[newHash] = MediaRecord({
+            hash: newHash,
+            publisher: msg.sender,
+            sourceName: sourceName,
+            timestamp: block.timestamp,
+            editHistory: versionNote,
+            parentHash: parentHash,
+            exists: true
+        });
+
+        emit MediaVersionRegistered(newHash, parentHash, msg.sender, block.timestamp);
+    }
+
     function verifyMedia(bytes32 hash)
         external
         view
@@ -72,7 +100,8 @@ contract MediaRegistry {
             address publisher,
             string memory sourceName,
             uint256 timestamp,
-            string memory editHistory
+            string memory editHistory,
+            bytes32 parentHash
         )
     {
         MediaRecord memory record = records[hash];
@@ -81,7 +110,8 @@ contract MediaRegistry {
             record.publisher,
             record.sourceName,
             record.timestamp,
-            record.editHistory
+            record.editHistory,
+            record.parentHash
         );
     }
 }

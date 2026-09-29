@@ -1,0 +1,8 @@
+{
+  "abi": [
+    "function registerMedia(bytes32 hash, string sourceName, string editHistory) external",
+    "function verifyMedia(bytes32 hash) external view returns (bool exists, address publisher, string sourceName, uint256 timestamp, string editHistory)",
+    "event MediaRegistered(bytes32 indexed hash, address indexed publisher, string sourceName, uint256 timestamp)",
+    "error AlreadyRegistered(bytes32 hash)"
+  ]
+}

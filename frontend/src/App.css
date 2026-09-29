@@ -1,0 +1,176 @@
+:root {
+  --ink: #0b1f2a;
+  --panel: #14313f;
+  --teal: #2dd4bf;
+  --amber: #f5a524;
+  --light: #f4f8f9;
+  --white: #ffffff;
+  --slate: #4a5b66;
+  --mute: #9fb3bf;
+  --dark-text: #10242f;
+  --ok-bg: #d9f7f2;
+  --ok-text: #0b5f54;
+  --bad-bg: #fdebc8;
+  --bad-text: #7a4b00;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--light);
+  color: var(--dark-text);
+  font-family: -apple-system, "Segoe UI", Calibri, Arial, sans-serif;
+}
+
+.app { max-width: 980px; margin: 0 auto; padding: 24px 20px 60px; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: var(--ink);
+  border-radius: 14px;
+  margin-bottom: 18px;
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark {
+  width: 14px; height: 14px; border-radius: 4px;
+  background: var(--teal);
+  box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.15);
+}
+.brand-name { color: var(--white); font-size: 20px; font-weight: 700; letter-spacing: 0.2px; }
+
+.wallet-pill {
+  color: var(--teal);
+  font-size: 14px;
+  font-weight: 600;
+  background: rgba(45, 212, 191, 0.12);
+  padding: 8px 14px;
+  border-radius: 999px;
+}
+
+.btn {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.05s ease, opacity 0.15s ease;
+}
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn:active:not(:disabled) { transform: scale(0.98); }
+.btn-ghost { background: rgba(255,255,255,0.08); color: var(--white); }
+.btn-primary { background: var(--teal); color: var(--ink); margin-top: 14px; }
+
+.banner {
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  margin-bottom: 14px;
+}
+.banner-warn { background: var(--bad-bg); color: var(--bad-text); }
+.banner-error { background: #fde2e1; color: #8a1f1f; }
+.banner code { background: rgba(0,0,0,0.08); padding: 1px 5px; border-radius: 4px; }
+
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tab {
+  border: none;
+  background: transparent;
+  color: var(--slate);
+  font-weight: 600;
+  font-size: 15px;
+  padding: 10px 4px;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+}
+.tab.active { color: var(--dark-text); border-bottom-color: var(--teal); }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 20px;
+}
+@media (max-width: 720px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+.card {
+  background: var(--white);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 1px 2px rgba(11,31,42,0.06);
+}
+
+.dropzone {
+  display: block;
+  cursor: pointer;
+}
+.dropzone input { display: none; }
+.dropzone-empty {
+  border: 2px dashed #d7e2e6;
+  border-radius: 12px;
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--mute);
+  font-size: 14px;
+}
+.preview-wrap { position: relative; }
+.preview-img {
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+  border-radius: 12px;
+  display: block;
+}
+
+.badge {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.badge-ok { background: var(--ok-bg); color: var(--ok-text); }
+.badge-bad { background: var(--bad-bg); color: var(--bad-text); }
+
+.field {
+  display: block;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--slate);
+  font-weight: 600;
+}
+.field input[type="text"] {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid #d7e2e6;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.inline-error {
+  margin-top: 12px;
+  color: #8a1f1f;
+  background: #fde2e1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.details-card h3 { margin: 0 0 10px; font-size: 16px; }
+.muted { color: var(--mute); font-size: 14px; }
+
+.record { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
+.record dt { color: var(--slate); font-size: 12px; font-weight: 700; text-transform: uppercase; align-self: start; }
+.record dd { margin: 0; font-size: 14px; word-break: break-word; }
+.mono { font-family: "Courier New", Consolas, monospace; font-size: 12.5px; }
