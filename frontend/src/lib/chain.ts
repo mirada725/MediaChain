@@ -25,12 +25,10 @@ export async function connectWallet(): Promise<{
   provider: BrowserProvider;
   address: string;
 }> {
-  const eth = (window as any).ethereum;
-  if (!eth) {
-    throw new Error(
-      "No wallet extension found. Install MetaMask and reload the page."
-    );
-  }
+    const eth = (window as any).ethereum;
+    if (!eth) {
+      throw Object.assign(new Error("No wallet found"), { code: "NO_WALLET" });
+    }
 
   await eth.request({ method: "eth_requestAccounts" });
   await ensureLocalHardhatNetwork(eth);
