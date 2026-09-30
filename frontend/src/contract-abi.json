@@ -1,0 +1,12 @@
+{
+  "abi": [
+    "function registerMedia(bytes32 hash, string sourceName, string editHistory) external",
+    "function registerVersion(bytes32 parentHash, bytes32 newHash, string sourceName, string versionNote) external",
+    "function verifyMedia(bytes32 hash) external view returns (bool exists, address publisher, string sourceName, uint256 timestamp, string editHistory, bytes32 parentHash)",
+    "event MediaRegistered(bytes32 indexed hash, address indexed publisher, string sourceName, uint256 timestamp)",
+    "event MediaVersionRegistered(bytes32 indexed hash, bytes32 indexed parentHash, address indexed publisher, uint256 timestamp)",
+    "error AlreadyRegistered(bytes32 hash)",
+    "error ParentNotFound(bytes32 parentHash)",
+    "error NotParentPublisher(bytes32 parentHash, address caller)"
+  ]
+}

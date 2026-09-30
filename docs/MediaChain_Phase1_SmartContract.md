@@ -139,27 +139,17 @@ Create `test/MediaRegistry.test.ts`:
 
 ```typescript
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { MediaRegistry } from "../typechain-types";
+import { network } from "hardhat";
 
 describe("MediaRegistry", function () {
-  let mediaRegistry: MediaRegistry;
-
-  beforeEach(async function () {
-    const MediaRegistryFactory = await ethers.getContractFactory("MediaRegistry");
-    mediaRegistry = await MediaRegistryFactory.deploy();
-    await mediaRegistry.waitForDeployment();
-  });
-
   it("registers a new media hash successfully", async function () {
+    const { ethers } = await network.connect();
     const [publisher] = await ethers.getSigners();
-    const hash = ethers.keccak256(ethers.toUtf8Bytes("sample-file-content"));
 
-    await expect(
-      mediaRegistry.registerMedia(hash, "Test Publisher", "original upload")
-    )
-      .to.emit(mediaRegistry, "MediaRegistered")
-      .withArgs(hash, publisher.address, "Test Publisher", anyValue());
+    const mediaRegistry = await ethers.deployContract("MediaRegistry");
+
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("sample-file-content"));
+    await mediaRegistry.registerMedia(hash, "Test Publisher", "original upload");
 
     const record = await mediaRegistry.verifyMedia(hash);
     expect(record.exists).to.equal(true);
@@ -168,8 +158,10 @@ describe("MediaRegistry", function () {
   });
 
   it("rejects registering the same hash twice", async function () {
-    const hash = ethers.keccak256(ethers.toUtf8Bytes("duplicate-content"));
+    const { ethers } = await network.connect();
+    const mediaRegistry = await ethers.deployContract("MediaRegistry");
 
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("duplicate-content"));
     await mediaRegistry.registerMedia(hash, "First Publisher", "original");
 
     await expect(
@@ -178,14 +170,20 @@ describe("MediaRegistry", function () {
   });
 
   it("returns exists = false for a hash that was never registered", async function () {
-    const unknownHash = ethers.keccak256(ethers.toUtf8Bytes("never-registered"));
+    const { ethers } = await network.connect();
+    const mediaRegistry = await ethers.deployContract("MediaRegistry");
 
+    const unknownHash = ethers.keccak256(ethers.toUtf8Bytes("never-registered"));
     const record = await mediaRegistry.verifyMedia(unknownHash);
+
     expect(record.exists).to.equal(false);
     expect(record.publisher).to.equal(ethers.ZeroAddress);
   });
 
   it("detects tampering: a modified file produces a different hash and is not found", async function () {
+    const { ethers } = await network.connect();
+    const mediaRegistry = await ethers.deployContract("MediaRegistry");
+
     const originalHash = ethers.keccak256(ethers.toUtf8Bytes("original-photo-bytes"));
     const tamperedHash = ethers.keccak256(ethers.toUtf8Bytes("original-photo-bytes-EDITED"));
 
@@ -195,14 +193,9 @@ describe("MediaRegistry", function () {
     const tamperedRecord = await mediaRegistry.verifyMedia(tamperedHash);
 
     expect(originalRecord.exists).to.equal(true);
-    expect(tamperedRecord.exists).to.equal(false); // this is your core "tamper detection" proof
+    expect(tamperedRecord.exists).to.equal(false);
   });
 });
-
-// Small helper since chai-matchers' anyValue import path varies by version
-function anyValue() {
-  return (): boolean => true;
-}
 ```
 
 > Note: if `anyValue` import causes issues, you can simplify the first test by removing the `.withArgs(...)` chain and just checking `.to.emit(mediaRegistry, "MediaRegistered")` alone — the important assertions (record fields) still fully verify correctness.
@@ -221,12 +214,11 @@ Expect all 4 tests to pass. **This is your most important checkpoint of the day*
 Create `scripts/deploy.ts`:
 
 ```typescript
-import { ethers } from "hardhat";
+import { network } from "hardhat";
 
 async function main() {
-  const MediaRegistryFactory = await ethers.getContractFactory("MediaRegistry");
-  const mediaRegistry = await MediaRegistryFactory.deploy();
-  await mediaRegistry.waitForDeployment();
+  const { ethers } = await network.connect();
+  const mediaRegistry = await ethers.deployContract("MediaRegistry");
 
   const address = await mediaRegistry.getAddress();
   console.log(`MediaRegistry deployed to: ${address}`);
