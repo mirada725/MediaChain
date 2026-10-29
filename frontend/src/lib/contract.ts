@@ -157,3 +157,55 @@ export async function getRecentWorks(
     })
   );
 }
+
+export type OpenDispute = {
+  hash: string;
+  creator: string;
+  publisher: string;
+  note: string;
+  registered: string;
+  challenger: string;
+  reason: string;
+  evidenceHash: string;
+  raisedAt: string;
+  raisedAtRaw: number;
+};
+
+/**
+ * Finds every work whose dispute is still open, oldest first.
+ * Reads DisputeRaised events, then checks each work's current status.
+ * Local chain only: it scans from block 0.
+ */
+export async function getOpenDisputes(contract: Contract): Promise<OpenDispute[]> {
+  const logs = await contract.queryFilter(contract.filters.DisputeRaised(), 0, "latest");
+  const hashes = Array.from(new Set(logs.map((l) => (l as any).args[0] as string)));
+
+  const items = await Promise.all(
+    hashes.map(async (hash) => {
+      const [status, challenger, evidenceHash, evidenceNote, raisedAt] =
+        await contract.getDispute(hash);
+      if (Number(status) !== 1) return null; // not open any more
+
+      const [, publisher, sourceName, timestamp, editHistory] =
+        await contract.verifyMedia(hash);
+      const item: OpenDispute = {
+        hash,
+        creator: sourceName,
+        publisher,
+        note: editHistory,
+        registered: new Date(Number(timestamp) * 1000).toLocaleString(),
+        challenger,
+        reason: evidenceNote,
+        evidenceHash,
+        raisedAt: new Date(Number(raisedAt) * 1000).toLocaleString(),
+        raisedAtRaw: Number(raisedAt),
+      };
+      return item;
+    })
+  );
+
+  return items
+    .filter((x): x is OpenDispute => x !== null)
+    .sort((a, b) => a.raisedAtRaw - b.raisedAtRaw);
+}
+

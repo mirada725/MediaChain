@@ -8,19 +8,22 @@ import {
   getVersionChain,
   getDisputeInfo,
   getRecentWorks,
+  getOpenDisputes,
   IFACE,
   ZERO_HASH,
   DISPUTE_LABELS,
   type VersionLink,
   type DisputeInfo,
   type RecentWork,
+  type OpenDispute,
 } from "./lib/contract";
 
 import { hashFile } from "./lib/hash";
 import { checkFile, ACCEPT, SUPPORTED_NOTE } from "./lib/fileTypes";
 import "./App.css";
 
-type Tab = "verify" | "register" | "recent";
+type Tab = "verify" | "register" | "recent" | "review";
+
 
 
 type VerifyResult = {
@@ -92,6 +95,33 @@ export default function App() {
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connectIsInfo, setConnectIsInfo] = useState(false);
+
+  const [linkHash, setLinkHash] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get("hash")
+  );
+
+  const openWork = (hash: string) => {
+    setLinkHash(hash);
+    setTab("verify");
+  };
+
+    const [arbiterAddr, setArbiterAddr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isConfigured()) return;
+    getReadContract(getReadProvider())
+      .arbiter()
+      .then((a: string) => setArbiterAddr(a))
+      .catch(() => {});
+  }, []);
+
+  const isArbiter =
+    !!account && !!arbiterAddr && account.toLowerCase() === arbiterAddr.toLowerCase();
+
+  // If the wallet switches away from the arbiter account, leave the review tab.
+  useEffect(() => {
+    if (tab === "review" && !isArbiter) setTab("verify");
+  }, [tab, isArbiter]);
 
   const onConnect = useCallback(async () => {
     setConnecting(true);
@@ -171,7 +201,11 @@ export default function App() {
       <nav className="tabs">
         <button
           className={`tab ${tab === "verify" ? "active" : ""}`}
-          onClick={() => setTab("verify")}
+          onClick={() => {
+            setLinkHash(null);
+            window.history.replaceState(null, "", window.location.pathname);
+            setTab("verify");
+          }}
         >
           Check a work
         </button>
@@ -187,18 +221,41 @@ export default function App() {
         >
           Recent works
         </button>
-
+                {isArbiter && (
+          <button
+            className={`tab ${tab === "review" ? "active" : ""}`}
+            onClick={() => setTab("review")}
+          >
+            Disputes to review
+          </button>
+        )}
       </nav>
 
       <main className="panel">
         {tab === "verify" && (
-          <VerifyPanel account={account} provider={provider} onNeedWallet={onConnect} />
+          <VerifyPanel
+            account={account}
+            provider={provider}
+            onNeedWallet={onConnect}
+            linkHash={linkHash}
+          />
         )}
         {tab === "register" && (
           <RegisterPanel account={account} provider={provider} onNeedWallet={onConnect} />
         )}
-        {tab === "recent" && <RecentPanel />}
+        {tab === "recent" && <RecentPanel onOpen={openWork} />}
+                {tab === "review" && isArbiter && (
+          <ReviewPanel
+            account={account}
+            provider={provider}
+            arbiter={arbiterAddr}
+            onNeedWallet={onConnect}
+          />
+        )}
+
       </main>
+
+
 
     </div>
   );
@@ -208,20 +265,28 @@ function VerifyPanel({
   account,
   provider,
   onNeedWallet,
+  linkHash,
 }: {
   account: string | null;
   provider: BrowserProvider | null;
   onNeedWallet: () => void;
+  linkHash: string | null;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<VerifyResult | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const clearLink = () =>
+    window.history.replaceState(null, "", window.location.pathname);
 
   const onPick = (f: File | null) => {
     setResult(null);
     setError(null);
+    setCopied(false);
+    clearLink();
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     const problem = f ? checkFile(f) : null;
     if (!f || problem) {
@@ -234,13 +299,13 @@ function VerifyPanel({
     setPreviewUrl(URL.createObjectURL(f));
   };
 
-  const onVerify = async () => {
-    if (!file) return;
+  // Loads a record by its fingerprint. Shared by the file check and share links.
+  const loadRecord = useCallback(async (hash: string) => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setCopied(false);
     try {
-      const hash = await hashFile(file);
       const contract = getReadContract(getReadProvider());
       const [exists, publisher, source, timestamp, editHistory, parentHash] =
         await contract.verifyMedia(hash);
@@ -269,10 +334,49 @@ function VerifyPanel({
         dispute,
         arbiter,
       });
+
+      // Put the share link in the address bar for registered works.
+      if (exists) window.history.replaceState(null, "", `?hash=${hash}`);
     } catch (err: any) {
       setError(formatError(err));
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const onVerify = async () => {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const hash = await hashFile(file);
+      await loadRecord(hash);
+    } catch (err: any) {
+      setError(formatError(err));
+      setLoading(false);
+    }
+  };
+
+  // Opened from a share link or from the Recent works list.
+  useEffect(() => {
+    if (!linkHash) return;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(linkHash)) {
+      setError("This link doesn't look right. Please check it and try again.");
+      return;
+    }
+    loadRecord(linkHash.toLowerCase());
+  }, [linkHash, loadRecord]);
+
+  const copyLink = async () => {
+    if (!result) return;
+    const url = `${window.location.origin}${window.location.pathname}?hash=${result.hash}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("We couldn't copy the link. You can copy it from the address bar instead.");
     }
   };
 
@@ -322,7 +426,22 @@ function VerifyPanel({
 
       <div className="card details-card">
         <h3>On-chain record</h3>
-        {!result && <p className="muted">Check a file to see its proof-of-authorship record here.</p>}
+        {!result && !loading && (
+          <p className="muted">Check a file to see its proof-of-authorship record here.</p>
+        )}
+        {loading && !result && <p className="muted">Loading the record…</p>}
+
+        {/* ADDITION 1: status message when there is no file preview (link mode) */}
+        {result && !file && (
+          <div className={result.exists && !upheld ? "inline-ok" : "inline-error"}>
+            {!result.exists
+              ? "No matching registration found"
+              : upheld
+              ? "Registered, but an earlier owner was recognised"
+              : "Registered: proof of ownership"}
+          </div>
+        )}
+
         {result && (
           <>
             <dl className="record">
@@ -343,6 +462,22 @@ function VerifyPanel({
                 </>
               )}
             </dl>
+
+            {/* ADDITION 2: share link button and link-mode hint */}
+            {result.exists && (
+              <>
+                <button className="btn btn-ghost" onClick={copyLink}>
+                  {copied ? "Link copied" : "Copy share link"}
+                </button>
+                {!file && (
+                  <p className="muted">
+                    Opened from a link. To confirm that a file matches, choose it on
+                    the left and check it.
+                  </p>
+                )}
+              </>
+            )}
+
             {result.exists && result.chain && result.chain.length > 0 && (
               <div className="version-history">
                 <h4>Version history</h4>
@@ -377,6 +512,7 @@ function VerifyPanel({
     </div>
   );
 }
+
 
 function DisputeSection({
   hash,
@@ -717,7 +853,8 @@ function RegisterPanel({
   );
 }
 
-function RecentPanel() {
+function RecentPanel({ onOpen }: { onOpen: (hash: string) => void }) {
+
   const [works, setWorks] = useState<RecentWork[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -758,7 +895,7 @@ function RecentPanel() {
       {works && works.length > 0 && (
         <ol className="version-list">
           {works.map((w) => (
-            <li key={w.hash}>
+                        <li key={w.hash}>
               <span className="version-label">
                 {w.creator || "Unknown"}
                 {w.isVersion ? " · New version" : ""}
@@ -775,6 +912,9 @@ function RecentPanel() {
                   {DISPUTE_LABELS[w.disputeStatus]}
                 </span>
               )}
+              <button className="btn btn-ghost" onClick={() => onOpen(w.hash)}>
+                Open
+              </button>
             </li>
           ))}
         </ol>
@@ -782,3 +922,147 @@ function RecentPanel() {
     </div>
   );
 }
+
+
+function ReviewPanel({
+  account,
+  provider,
+  arbiter,
+  onNeedWallet,
+}: {
+  account: string | null;
+  provider: BrowserProvider | null;
+  arbiter: string | null;
+  onNeedWallet: () => void;
+}) {
+  const [items, setItems] = useState<OpenDispute[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [detail, setDetail] = useState<DisputeInfo | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const contract = getReadContract(getReadProvider());
+      setItems(await getOpenDisputes(contract));
+    } catch (err: any) {
+      setError(formatError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Opens or closes the review panel for one dispute.
+  const toggle = async (hash: string) => {
+    setNotice(null);
+    setError(null);
+    if (selected === hash) {
+      setSelected(null);
+      setDetail(null);
+      return;
+    }
+    setSelected(hash);
+    setDetail(null);
+    try {
+      const contract = getReadContract(getReadProvider());
+      setDetail(await getDisputeInfo(contract, hash));
+    } catch (err: any) {
+      setError(formatError(err));
+    }
+  };
+
+  // Runs after the arbiter's decision is confirmed.
+  const onDecided = async () => {
+    setSelected(null);
+    setDetail(null);
+    await load();
+    setNotice("Your decision was recorded. This dispute is no longer in the list.");
+  };
+
+  const sel = items?.find((i) => i.hash === selected);
+
+  return (
+    <div className="card">
+      <h3>Disputes to review</h3>
+      <p className="muted">
+        Open disputes, oldest first. Choose <b>Review</b> to see the details and make
+        your decision here.
+      </p>
+      <button className="btn btn-ghost" onClick={load} disabled={loading}>
+        {loading ? "Loading…" : "Refresh"}
+      </button>
+
+      {error && <div className="inline-error">{error}</div>}
+      {notice && <div className="inline-ok">{notice}</div>}
+
+      {sel && (
+        <div>
+          <h4>Reviewing: {sel.creator || "Unknown"}</h4>
+          <dl className="record">
+            <dt>Digital fingerprint</dt>
+            <dd className="mono">{sel.hash}</dd>
+            <dt>Creator</dt>
+            <dd>{sel.creator || "—"}</dd>
+            <dt>Registered</dt>
+            <dd>{sel.registered}</dd>
+            <dt>Notes</dt>
+            <dd>{sel.note || "—"}</dd>
+            <dt>Registered by</dt>
+            <dd className="mono">{sel.publisher}</dd>
+          </dl>
+          {detail ? (
+            <DisputeSection
+              key={sel.hash}
+              hash={sel.hash}
+              publisher={sel.publisher}
+              arbiter={arbiter ?? undefined}
+              dispute={detail}
+              account={account}
+              provider={provider}
+              onNeedWallet={onNeedWallet}
+              onChanged={onDecided}
+            />
+          ) : (
+            <p className="muted">Loading the dispute…</p>
+          )}
+        </div>
+      )}
+
+      {items && items.length === 0 && !loading && (
+        <p className="muted">No disputes are waiting for review.</p>
+      )}
+
+      {items && items.length > 0 && (
+        <ol className="version-list">
+          {items.map((d) => (
+            <li key={d.hash}>
+              <span className="version-label">{d.creator || "Unknown"}</span>
+              <span className="version-note">Reason: {d.reason || "—"}</span>
+              <span className="version-date">Raised {d.raisedAt}</span>
+              <span className="muted">
+                Challenged by <span className="mono">{short(d.challenger)}</span>
+              </span>
+              <span className="mono">{shortHash(d.hash)}</span>
+              {d.evidenceHash !== ZERO_HASH && (
+                <span className="muted">
+                  Evidence fingerprint: <span className="mono">{shortHash(d.evidenceHash)}</span>
+                </span>
+              )}
+              <button className="btn btn-primary" onClick={() => toggle(d.hash)}>
+                {selected === d.hash ? "Close" : "Review"}
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
