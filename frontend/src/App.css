@@ -270,3 +270,13 @@ body {
   background: rgba(128, 128, 128, 0.15);
   border: 1px solid rgba(128, 128, 128, 0.3);
 }
+
+/* Neutral progress message (not an error). Works on light and dark themes. */
+.inline-info {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  font-size: 14px;
+}

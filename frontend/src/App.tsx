@@ -1,6 +1,13 @@
 import { useState, useCallback, useEffect } from "react";
 import type { BrowserProvider } from "ethers";
-import { connectWallet, getReadProvider } from "./lib/chain";
+import {
+  connectWallet,
+  getReadProvider,
+  waitForReadNode,
+  txUrl,
+  addressUrl,
+  CONTRACT_ADDRESS,
+} from "./lib/chain";
 import {
   getReadContract,
   getWriteContract,
@@ -61,6 +68,8 @@ function formatError(err: any): string {
     return "Your wallet doesn't have enough funds to pay the network fee.";
   if (code === "NETWORK_ERROR")
     return "We couldn't reach the network. Please check your connection and try again.";
+  if (code === "TIMEOUT")
+    return "The network is taking longer than usual. Your transaction may still go through. Check the activity tab in MetaMask or the block explorer, then refresh this page.";
 
   const data = err?.data ?? err?.info?.error?.data ?? err?.error?.data;
   if (typeof data === "string" && data.startsWith("0x")) {
@@ -86,6 +95,41 @@ function formatError(err: any): string {
   }
 
   return "Something went wrong. Please try again. If this keeps happening, refresh the page.";
+}
+
+// Where a write is: asking the wallet, or waiting for the network to include it.
+type Stage = "idle" | "wallet" | "network";
+
+function PendingNotice({ stage, hash }: { stage: Stage; hash: string | null }) {
+  if (stage === "idle") return null;
+  if (stage === "wallet") {
+    return <div className="inline-info">Please confirm the request in MetaMask…</div>;
+  }
+  const url = hash ? txUrl(hash) : null;
+  return (
+    <div className="inline-info">
+      Waiting for the network to confirm. This usually takes about 12 seconds, sometimes a
+      little longer. Please keep this page open.
+      {url && (
+        <>
+          {" "}
+          <a href={url} target="_blank" rel="noreferrer">
+            View on the block explorer
+          </a>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TxLink({ hash }: { hash: string }) {
+  const url = txUrl(hash);
+  if (!url) return <span className="mono">{hash}</span>;
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="mono">
+      {hash}
+    </a>
+  );
 }
 
 export default function App() {
@@ -254,6 +298,21 @@ export default function App() {
         )}
 
       </main>
+
+            {isConfigured() && addressUrl(CONTRACT_ADDRESS) && (
+        <p className="muted">
+          Contract:{" "}
+          <a
+            href={addressUrl(CONTRACT_ADDRESS)!}
+            target="_blank"
+            rel="noreferrer"
+            className="mono"
+          >
+            {short(CONTRACT_ADDRESS)}
+          </a>{" "}
+          on the block explorer
+        </p>
+      )}
 
 
 
@@ -539,6 +598,8 @@ function DisputeSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [stage, setStage] = useState<Stage>("idle");
+  const [pendingHash, setPendingHash] = useState<string | null>(null);
 
   const same = (a?: string | null, b?: string | null) =>
     !!a && !!b && a.toLowerCase() === b.toLowerCase();
@@ -555,11 +616,19 @@ function DisputeSection({
     setBusy(true);
     setError(null);
     setDone(null);
+    setPendingHash(null);
+    setStage("wallet");
     try {
       const signer = await provider.getSigner();
       const contract = getWriteContract(signer);
       const tx = await fn(contract);
-      await tx.wait();
+      setPendingHash(tx.hash);
+      setStage("network");
+      const receipt = await tx.wait(1, 180_000);
+      setStage("idle");
+      setPendingHash(null);
+      // Make sure the read-only RPC has caught up before the record is reloaded.
+      if (receipt) await waitForReadNode(receipt.blockNumber);
       setDone(successMsg);
       setNote("");
       setRuling("");
@@ -569,6 +638,8 @@ function DisputeSection({
       setError(formatError(err));
     } finally {
       setBusy(false);
+      setStage("idle");
+      setPendingHash(null);
     }
   };
 
@@ -642,7 +713,11 @@ function DisputeSection({
           </label>
           <p className="muted">{SUPPORTED_NOTE}</p>
           <button className="btn btn-primary" onClick={onRaise} disabled={busy}>
-            {busy ? "Signing & confirming…" : "Raise dispute"}
+            {busy
+              ? stage === "network"
+                ? "Waiting for confirmation…"
+                : "Confirm in MetaMask…"
+              : "Raise dispute"}
           </button>
         </div>
       )}
@@ -679,6 +754,8 @@ function DisputeSection({
         </p>
       )}
 
+      <PendingNotice stage={stage} hash={pendingHash} />
+
       {done && <div className="inline-ok">{done}</div>}
       {error && <div className="inline-error">{error}</div>}
     </div>
@@ -703,6 +780,8 @@ function RegisterPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [stage, setStage] = useState<Stage>("idle");
+  const [pendingHash, setPendingHash] = useState<string | null>(null);
 
   const onPick = (f: File | null) => {
     setTxHash(null);
@@ -736,6 +815,8 @@ function RegisterPanel({
     setLoading(true);
     setError(null);
     setTxHash(null);
+    setPendingHash(null);
+    setStage("wallet");
     try {
       const hash = await hashFile(file);
       const signer = await provider.getSigner();
@@ -748,12 +829,16 @@ function RegisterPanel({
       } else {
         tx = await contract.registerMedia(hash, source || "Unknown", note);
       }
-      const receipt = await tx.wait();
+      setPendingHash(tx.hash);
+      setStage("network");
+      const receipt = await tx.wait(1, 180_000);
       setTxHash(receipt?.hash ?? tx.hash);
     } catch (err: any) {
       setError(formatError(err));
     } finally {
       setLoading(false);
+      setStage("idle");
+      setPendingHash(null);
     }
   };
 
@@ -826,9 +911,14 @@ function RegisterPanel({
           </button>
         ) : (
           <button className="btn btn-primary" onClick={onRegister} disabled={!file || loading}>
-            {loading ? "Signing & confirming…" : "Register"}
+            {loading
+              ? stage === "network"
+                ? "Waiting for confirmation…"
+                : "Confirm in MetaMask…"
+              : "Register"}
           </button>
         )}
+        <PendingNotice stage={stage} hash={pendingHash} />
         {error && <div className="inline-error">{error}</div>}
       </div>
 
@@ -845,7 +935,9 @@ function RegisterPanel({
             <dt>Status</dt>
             <dd>Your work is registered</dd>
             <dt>Transaction hash</dt>
-            <dd className="mono">{txHash}</dd>
+            <dd>
+              <TxLink hash={txHash} />
+            </dd>
           </dl>
         )}
       </div>

@@ -84,3 +84,20 @@ async function ensureNetwork(eth: any) {
     }
   }
 }
+
+/**
+ * After a transaction is confirmed, the read-only RPC may still be a block behind
+ * the wallet's RPC. Wait until it has reached the transaction's block, so the
+ * screen does not show old data. Gives up after about 15 seconds.
+ */
+export async function waitForReadNode(blockNumber: number): Promise<void> {
+  const provider = getReadProvider();
+  for (let i = 0; i < 15; i++) {
+    try {
+      if ((await provider.getBlockNumber()) >= blockNumber) return;
+    } catch {
+      // ignore a failed read and try again
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
