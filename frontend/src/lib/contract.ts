@@ -1,6 +1,6 @@
 import { Contract, Interface, type Signer, type Provider } from "ethers";
 import artifact from "../contract-abi.json";
-import { CONTRACT_ADDRESS } from "./chain";
+import { CONTRACT_ADDRESS, DEPLOY_BLOCK } from "./chain";
 
 
 // Matches your MediaRegistry.sol exactly (registerMedia, verifyMedia,
@@ -36,6 +36,27 @@ export function getReadContract(provider: Provider) {
 
 export const ZERO_HASH =
   "0x0000000000000000000000000000000000000000000000000000000000000000".slice(0, 66);
+
+/**
+ * Free public RPC servers often refuse a log search that covers too many blocks.
+ * So we search in small pieces, from the deployment block up to the latest block.
+ */
+const LOG_CHUNK = 5000;
+
+async function queryInChunks(contract: Contract, filter: any): Promise<any[]> {
+  const provider = contract.runner?.provider;
+  if (!provider) {
+    throw new Error("No provider available to read events.");
+  }
+  const latest = await provider.getBlockNumber();
+  const logs: any[] = [];
+  for (let from = DEPLOY_BLOCK; from <= latest; from += LOG_CHUNK) {
+    const to = Math.min(from + LOG_CHUNK - 1, latest);
+    const part = await contract.queryFilter(filter, from, to);
+    logs.push(...part);
+  }
+  return logs;
+}
 
 export type VersionLink = {
   hash: string;
@@ -119,15 +140,16 @@ export type RecentWork = {
 
 /**
  * Reads registration events from the chain, newest first, and fills in each
- * work's details. Local chain only: it scans from block 0, which is fine here.
+ * work's details. The search starts at the deployment block (VITE_DEPLOY_BLOCK)
+ * and runs in small pieces, so it also works on a free public RPC.
  */
 export async function getRecentWorks(
   contract: Contract,
   limit = 20
 ): Promise<RecentWork[]> {
   const [originals, versions] = await Promise.all([
-    contract.queryFilter(contract.filters.MediaRegistered(), 0, "latest"),
-    contract.queryFilter(contract.filters.MediaVersionRegistered(), 0, "latest"),
+    queryInChunks(contract, contract.filters.MediaRegistered()),
+    queryInChunks(contract, contract.filters.MediaVersionRegistered()),
   ]);
 
   const entries = [
@@ -174,10 +196,10 @@ export type OpenDispute = {
 /**
  * Finds every work whose dispute is still open, oldest first.
  * Reads DisputeRaised events, then checks each work's current status.
- * Local chain only: it scans from block 0.
+ * The search starts at the deployment block and runs in small pieces.
  */
 export async function getOpenDisputes(contract: Contract): Promise<OpenDispute[]> {
-  const logs = await contract.queryFilter(contract.filters.DisputeRaised(), 0, "latest");
+  const logs = await queryInChunks(contract, contract.filters.DisputeRaised());
   const hashes = Array.from(new Set(logs.map((l) => (l as any).args[0] as string)));
 
   const items = await Promise.all(
@@ -208,4 +230,3 @@ export async function getOpenDisputes(contract: Contract): Promise<OpenDispute[]
     .filter((x): x is OpenDispute => x !== null)
     .sort((a, b) => a.raisedAtRaw - b.raisedAtRaw);
 }
-
