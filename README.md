@@ -1,57 +1,77 @@
-# Sample Hardhat 3 Project (`mocha` and `ethers`)
+# MediaChain
 
-This project showcases a Hardhat 3 project using `mocha` for tests and the `ethers` library for Ethereum interactions.
+MediaChain is a media provenance demo built around a Solidity contract that anchors media hashes on-chain, tracks version lineage, and supports arbiter-resolved disputes.
 
-To learn more about Hardhat 3, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3](https://hardhat.org/hardhat3-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+## Repository layout
 
-## Project Overview
+- `contracts/MediaRegistry.sol` - core smart contract
+- `test/MediaRegistry.test.ts` - Hardhat + ethers contract tests
+- `scripts/deploy.ts` - deployment script for local and Sepolia networks
+- `backend/` - Express API for file upload, hashing, and on-chain register/verify calls
+- `frontend/` - React + Vite dapp for direct wallet-based interaction
 
-This example project includes:
+## Prerequisites
 
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using `mocha` and ethers.js
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
+- Node.js 20+ (recommended)
+- npm
 
-## Usage
+## Smart contract workflow
 
-### Running Tests
+From repository root:
 
-To run all the tests in the project, execute the following command:
-
-```shell
+```bash
+npm install
 npx hardhat test
 ```
 
-You can also selectively run the Solidity or `mocha` tests:
+Start a local chain:
 
-```shell
-npx hardhat test solidity
-npx hardhat test mocha
+```bash
+npx hardhat node
 ```
 
-### Make a deployment to Sepolia
+Deploy `MediaRegistry` (in a second terminal):
 
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
-
-To run the deployment to a local chain:
-
-```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
+```bash
+npx hardhat run scripts/deploy.ts --network localhost
 ```
 
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
+Deploy to Sepolia:
 
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
-
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
-
-```shell
+```bash
+npx hardhat keystore set SEPOLIA_RPC_URL
 npx hardhat keystore set SEPOLIA_PRIVATE_KEY
+npx hardhat run scripts/deploy.ts --network sepolia
 ```
 
-After setting the variable, you can run the deployment with the Sepolia network:
+## Backend (optional API path)
 
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
+The backend exposes:
+
+- `POST /api/media/register` (multipart file + metadata)
+- `POST /api/media/verify` (multipart file)
+- `GET /health`
+
+Setup:
+
+```bash
+cd backend
+npm install
+cp .env.example .env
+npm run dev
 ```
+
+Set `.env` values for `RPC_URL`, `CONTRACT_ADDRESS`, `PRIVATE_KEY`, and `PORT`.
+
+## Frontend
+
+The frontend can call the contract directly with MetaMask.
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Configure `.env.local` with your deployed contract address and target network values.
