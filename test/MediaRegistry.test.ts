@@ -131,4 +131,167 @@ describe("MediaRegistry", function () {
       .to.be.revertedWithCustomError(contract, "AlreadyRegistered")
       .withArgs(already);
   });
+
+    // ---------- Feature B: disputes ----------
+
+  it("sets the deployer as the arbiter", async function () {
+    const { ethers } = await network.connect();
+    const [deployer] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+
+    expect(await contract.arbiter()).to.equal(deployer.address);
+  });
+
+  it("lets a third party raise a dispute against a registered work", async function () {
+    const { ethers } = await network.connect();
+    const [, publisher, challenger] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("disputed-work"));
+    const evidence = ethers.keccak256(ethers.toUtf8Bytes("my-earlier-draft"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+
+    await expect(
+      contract.connect(challenger).raiseDispute(work, evidence, "I made this in 2024")
+    )
+      .to.emit(contract, "DisputeRaised")
+      .withArgs(work, challenger.address, evidence, (ts: bigint) => ts > 0n);
+
+    const d = await contract.getDispute(work);
+    expect(d.status).to.equal(1n); // Open
+    expect(d.challenger).to.equal(challenger.address);
+    expect(d.evidenceHash).to.equal(evidence);
+    expect(d.evidenceNote).to.equal("I made this in 2024");
+  });
+
+  it("rejects a dispute against a work that was never registered", async function () {
+    const { ethers } = await network.connect();
+    const [, , challenger] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const ghost = ethers.keccak256(ethers.toUtf8Bytes("ghost-work"));
+
+    await expect(
+      contract.connect(challenger).raiseDispute(ghost, ethers.ZeroHash, "note")
+    )
+      .to.be.revertedWithCustomError(contract, "MediaNotFound")
+      .withArgs(ghost);
+  });
+
+  it("rejects a publisher disputing their own work", async function () {
+    const { ethers } = await network.connect();
+    const [, publisher] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("self-dispute"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+
+    await expect(
+      contract.connect(publisher).raiseDispute(work, ethers.ZeroHash, "note")
+    )
+      .to.be.revertedWithCustomError(contract, "CannotDisputeOwnWork")
+      .withArgs(work);
+  });
+
+  it("rejects a second dispute while one is still open", async function () {
+    const { ethers } = await network.connect();
+    const [, publisher, challenger, other] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("double-dispute"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+    await contract.connect(challenger).raiseDispute(work, ethers.ZeroHash, "first");
+
+    await expect(
+      contract.connect(other).raiseDispute(work, ethers.ZeroHash, "second")
+    )
+      .to.be.revertedWithCustomError(contract, "DisputeAlreadyOpen")
+      .withArgs(work);
+  });
+
+  it("lets the arbiter uphold a dispute without altering the original record", async function () {
+    const { ethers } = await network.connect();
+    const [arbiter, publisher, challenger] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("upheld-work"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+    await contract.connect(challenger).raiseDispute(work, ethers.ZeroHash, "prior art");
+
+    await expect(contract.connect(arbiter).resolveDispute(work, true, "Evidence is convincing"))
+      .to.emit(contract, "DisputeResolved")
+      .withArgs(work, arbiter.address, true, (ts: bigint) => ts > 0n);
+
+    const d = await contract.getDispute(work);
+    expect(d.status).to.equal(2n); // Upheld
+    expect(d.ruling).to.equal("Evidence is convincing");
+    expect(d.resolvedAt).to.be.greaterThan(0n);
+
+    // The record itself is untouched: annotated, never deleted.
+    const record = await contract.verifyMedia(work);
+    expect(record.exists).to.equal(true);
+    expect(record.publisher).to.equal(publisher.address);
+  });
+
+  it("lets the arbiter reject a dispute, after which it can be re-raised", async function () {
+    const { ethers } = await network.connect();
+    const [arbiter, publisher, challenger] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("rejected-work"));
+    const betterEvidence = ethers.keccak256(ethers.toUtf8Bytes("stronger-proof"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+    await contract.connect(challenger).raiseDispute(work, ethers.ZeroHash, "weak claim");
+    await contract.connect(arbiter).resolveDispute(work, false, "Insufficient evidence");
+
+    expect((await contract.getDispute(work)).status).to.equal(3n); // Rejected
+
+    await contract.connect(challenger).raiseDispute(work, betterEvidence, "new evidence");
+    const d = await contract.getDispute(work);
+    expect(d.status).to.equal(1n); // Open again
+    expect(d.evidenceHash).to.equal(betterEvidence);
+  });
+
+  it("makes an upheld dispute final", async function () {
+    const { ethers } = await network.connect();
+    const [arbiter, publisher, challenger] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("final-upheld"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+    await contract.connect(challenger).raiseDispute(work, ethers.ZeroHash, "claim");
+    await contract.connect(arbiter).resolveDispute(work, true, "Upheld");
+
+    await expect(
+      contract.connect(challenger).raiseDispute(work, ethers.ZeroHash, "again")
+    )
+      .to.be.revertedWithCustomError(contract, "DisputeAlreadyUpheld")
+      .withArgs(work);
+  });
+
+  it("rejects resolving a dispute by anyone other than the arbiter", async function () {
+    const { ethers } = await network.connect();
+    const [, publisher, challenger] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("not-arbiter"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+    await contract.connect(challenger).raiseDispute(work, ethers.ZeroHash, "claim");
+
+    await expect(contract.connect(publisher).resolveDispute(work, false, "I say no"))
+      .to.be.revertedWithCustomError(contract, "NotArbiter")
+      .withArgs(publisher.address);
+  });
+
+  it("rejects resolving a dispute that is not open", async function () {
+    const { ethers } = await network.connect();
+    const [arbiter, publisher] = await ethers.getSigners();
+    const contract = await ethers.deployContract("MediaRegistry");
+    const work = ethers.keccak256(ethers.toUtf8Bytes("no-dispute"));
+
+    await contract.connect(publisher).registerMedia(work, "Publisher", "original");
+
+    await expect(contract.connect(arbiter).resolveDispute(work, true, "nothing to rule on"))
+      .to.be.revertedWithCustomError(contract, "NoOpenDispute")
+      .withArgs(work);
+  });
 });

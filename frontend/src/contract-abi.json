@@ -7,6 +7,18 @@
     "event MediaVersionRegistered(bytes32 indexed hash, bytes32 indexed parentHash, address indexed publisher, uint256 timestamp)",
     "error AlreadyRegistered(bytes32 hash)",
     "error ParentNotFound(bytes32 parentHash)",
-    "error NotParentPublisher(bytes32 parentHash, address caller)"
+    "error NotParentPublisher(bytes32 parentHash, address caller)",
+    "function arbiter() view returns (address)",
+    "function raiseDispute(bytes32 hash, bytes32 evidenceHash, string evidenceNote) external",
+    "function resolveDispute(bytes32 hash, bool upheld, string ruling) external",
+    "function getDispute(bytes32 hash) view returns (uint8 status, address challenger, bytes32 evidenceHash, string evidenceNote, uint256 raisedAt, string ruling, uint256 resolvedAt)",
+    "event DisputeRaised(bytes32 indexed hash, address indexed challenger, bytes32 evidenceHash, uint256 timestamp)",
+    "event DisputeResolved(bytes32 indexed hash, address indexed arbiter, bool upheld, uint256 timestamp)",
+    "error MediaNotFound(bytes32 hash)",
+    "error CannotDisputeOwnWork(bytes32 hash)",
+    "error DisputeAlreadyOpen(bytes32 hash)",
+    "error DisputeAlreadyUpheld(bytes32 hash)",
+    "error NotArbiter(address caller)",
+    "error NoOpenDispute(bytes32 hash)"
   ]
 }
