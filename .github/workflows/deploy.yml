@@ -1,0 +1,64 @@
+name: Deploy frontend to GitHub Pages
+
+# Run on every push to main, and allow a manual run from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Minimum permissions needed to publish to Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# If two deploys start together, cancel the older one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_BASE_PATH: /MediaChain/
+          VITE_CONTRACT_ADDRESS: ${{ vars.VITE_CONTRACT_ADDRESS }}
+          VITE_RPC_URL: ${{ vars.VITE_RPC_URL }}
+          VITE_CHAIN_ID: ${{ vars.VITE_CHAIN_ID }}
+          VITE_CHAIN_NAME: ${{ vars.VITE_CHAIN_NAME }}
+          VITE_EXPLORER_URL: ${{ vars.VITE_EXPLORER_URL }}
+          VITE_DEPLOY_BLOCK: ${{ vars.VITE_DEPLOY_BLOCK }}
+        run: npm run build
+
+      - name: Upload the built site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
