@@ -1,4 +1,4 @@
-import { BrowserProvider, JsonRpcProvider } from "ethers";
+import { BrowserProvider, FetchRequest, JsonRpcProvider } from "ethers";
 
 export const RPC_URL = import.meta.env.VITE_RPC_URL ?? "http://127.0.0.1:8545";
 export const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID ?? 31337);

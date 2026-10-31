@@ -1,6 +1,7 @@
 import { Contract, Interface, type Signer, type Provider } from "ethers";
 import artifact from "../contract-abi.json";
 import {
+  CHAIN_ID,
   CONTRACT_ADDRESS,
   DEPLOY_BLOCK,
   LOGS_RPC_URL,
@@ -44,79 +45,199 @@ export function getReadContract(provider: Provider) {
 export const ZERO_HASH =
   "0x0000000000000000000000000000000000000000000000000000000000000000".slice(0, 66);
 
-/**
- * Event searches are split into pieces of this many blocks, because servers
- * often refuse one search that covers too many blocks.
- */
-const LOG_CHUNK = 5000;
+// ---------------------------------------------------------------------------
+// Reading the event history
+// ---------------------------------------------------------------------------
 
 /**
- * The newest blocks are also searched on the normal RPC. The indexing service
- * can be a little behind the chain, so this makes a brand new registration
- * show up in the lists straight away.
+ * The newest blocks are also read from the normal RPC. The history service can
+ * be a little behind the chain, so this makes a brand new registration show up
+ * straight away.
  */
 const RECENT_WINDOW = 1000;
 
-/** Thrown when the event history cannot be read from the logs server. */
+/**
+ * The cache never trusts the newest blocks. It remembers events only up to
+ * (latest block - this number), so events the history service has not indexed
+ * yet are searched again next time.
+ */
+const CACHE_SAFETY = 100;
+
+/** Minimum time between two real searches. Calls inside this time share the last answer. */
+const REUSE_MS = 3000;
+
+/** One event found on the chain, reduced to what the app needs. */
+type ChainEvent = {
+  name: string; // e.g. "MediaRegistered"
+  hash: string; // the file fingerprint (first argument of every event)
+  blockNumber: number;
+  index: number;
+  tx: string;
+};
+
+/** Thrown when the event history cannot be read. */
 export class LogsUnavailableError extends Error {
-  code = "LOGS_UNAVAILABLE";
-  constructor() {
-    super("Event history is unavailable.");
+  code: string;
+  constructor(busy: boolean) {
+    super(busy ? "The history service is busy." : "Event history is unavailable.");
+    this.code = busy ? "LOGS_BUSY" : "LOGS_UNAVAILABLE";
   }
 }
 
-async function searchRange(
-  contract: Contract,
-  eventName: string,
-  from: number,
-  to: number
-): Promise<any[]> {
-  const logs: any[] = [];
-  for (let start = from; start <= to; start += LOG_CHUNK) {
-    const end = Math.min(start + LOG_CHUNK - 1, to);
-    logs.push(...(await contract.queryFilter(eventName, start, end)));
+function isRateLimited(err: any): boolean {
+  let text = String(err?.message ?? "");
+  try {
+    text += JSON.stringify(err?.info ?? {});
+  } catch {
+    /* ignore */
   }
-  return logs;
+  return /429|too many/i.test(text);
 }
 
 /**
- * Finds every log of one event, from the deployment block to the latest block.
- * The full history comes from the logs server (VITE_LOGS_RPC_URL). The newest
- * blocks are added from the normal RPC when the two servers are different.
+ * Reads all events of the contract between two blocks in ONE request and
+ * turns them into simple objects. If the server fails for a reason other than
+ * rate limiting, the range is split in two and tried again (at most twice).
  */
-async function findEvents(eventName: string): Promise<any[]> {
+async function fetchRange(
+  provider: Provider,
+  from: number,
+  to: number,
+  depth = 0
+): Promise<ChainEvent[]> {
+  if (from > to) return [];
+  try {
+    const logs = await provider.getLogs({
+      address: CONTRACT_ADDRESS,
+      fromBlock: from,
+      toBlock: to,
+    });
+    const events: ChainEvent[] = [];
+    for (const log of logs) {
+      let parsed;
+      try {
+        parsed = IFACE.parseLog({ topics: [...log.topics], data: log.data });
+      } catch {
+        continue; // not an event from our ABI
+      }
+      if (!parsed) continue;
+      events.push({
+        name: parsed.name,
+        hash: String(parsed.args[0]),
+        blockNumber: log.blockNumber,
+        index: log.index,
+        tx: log.transactionHash,
+      });
+    }
+    return events;
+  } catch (err) {
+    if (isRateLimited(err) || depth >= 2 || to - from < 2) throw err;
+    const mid = Math.floor((from + to) / 2);
+    const left = await fetchRange(provider, from, mid, depth + 1);
+    const right = await fetchRange(provider, mid + 1, to, depth + 1);
+    return [...left, ...right];
+  }
+}
+
+// --- browser cache (not used on the local Hardhat chain, which resets often) ---
+
+type EventCache = { scannedTo: number; events: ChainEvent[] };
+
+const USE_CACHE = CHAIN_ID !== 31337;
+const CACHE_KEY = `mediachain:events:${CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${DEPLOY_BLOCK}`;
+
+function readCache(): EventCache | null {
+  if (!USE_CACHE) return null;
+  try {
+    const raw = window.localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.scannedTo !== "number" || !Array.isArray(parsed?.events)) return null;
+    return parsed as EventCache;
+  } catch {
+    return null; // storage blocked or data damaged: just search again
+  }
+}
+
+function writeCache(cache: EventCache) {
+  if (!USE_CACHE) return;
+  try {
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    /* storage full or blocked: the page still works without a cache */
+  }
+}
+
+// --- loading with shared requests ---
+
+let inflight: Promise<ChainEvent[]> | null = null;
+let lastLoad: { at: number; events: ChainEvent[] } | null = null;
+
+async function doLoad(): Promise<ChainEvent[]> {
   const latest = await getReadProvider().getBlockNumber();
 
-  const history = new Contract(CONTRACT_ADDRESS, ABI, getLogsProvider());
-  let logs: any[];
+  let cache = readCache();
+  if (cache && cache.scannedTo > latest) cache = null; // data from another chain: ignore
+  const from = cache ? Math.max(DEPLOY_BLOCK, cache.scannedTo) : DEPLOY_BLOCK;
+
+  // 1. History from the logs service: ONE request for the whole missing range.
+  let fresh: ChainEvent[] = [];
+  let failure: unknown = null;
   try {
-    logs = await searchRange(history, eventName, DEPLOY_BLOCK, latest);
+    fresh = await fetchRange(getLogsProvider(), from, latest);
   } catch (err) {
     console.error(err); // technical details stay in the browser console
-    throw new LogsUnavailableError();
+    failure = err;
   }
+  // Without any saved history, a failure cannot be hidden.
+  if (failure && !cache) throw new LogsUnavailableError(isRateLimited(failure));
 
+  // 2. Merge saved events, fresh events, and the newest blocks from the normal RPC.
+  const merged = new Map<string, ChainEvent>();
+  const add = (list: ChainEvent[]) => {
+    for (const e of list) merged.set(`${e.tx}-${e.index}`, e);
+  };
+  if (cache) add(cache.events);
+  add(fresh);
   if (LOGS_RPC_URL !== RPC_URL) {
     try {
-      const recent = new Contract(CONTRACT_ADDRESS, ABI, getReadProvider());
-      const from = Math.max(DEPLOY_BLOCK, latest - RECENT_WINDOW);
-      const extra = await searchRange(recent, eventName, from, latest);
-      const seen = new Set(logs.map((l) => `${l.transactionHash}-${l.index}`));
-      for (const log of extra) {
-        const key = `${log.transactionHash}-${log.index}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          logs.push(log);
-        }
-      }
+      add(await fetchRange(getReadProvider(), Math.max(DEPLOY_BLOCK, latest - RECENT_WINDOW), latest));
     } catch {
-      // Best effort only. The history above is already complete up to what the
-      // logs server has indexed.
+      /* best effort only */
     }
   }
+  const events = Array.from(merged.values());
 
-  return logs;
+  // 3. Save for the next visit, only after a fully successful search.
+  if (!failure) {
+    writeCache({ scannedTo: Math.max(DEPLOY_BLOCK, latest - CACHE_SAFETY), events });
+  }
+  return events;
 }
+
+/** All events of the contract. Two callers at the same moment share one search. */
+function loadAllEvents(): Promise<ChainEvent[]> {
+  if (inflight) return inflight;
+  if (lastLoad && Date.now() - lastLoad.at < REUSE_MS) {
+    return Promise.resolve(lastLoad.events);
+  }
+  inflight = doLoad()
+    .then((events) => {
+      lastLoad = { at: Date.now(), events };
+      return events;
+    })
+    .finally(() => {
+      inflight = null;
+    });
+  return inflight;
+}
+
+async function findEvents(eventName: string): Promise<ChainEvent[]> {
+  const all = await loadAllEvents();
+  return all.filter((e) => e.name === eventName);
+}
+
+// ---------------------------------------------------------------------------
 
 export type VersionLink = {
   hash: string;
@@ -200,8 +321,7 @@ export type RecentWork = {
 
 /**
  * Reads registration events from the chain, newest first, and fills in each
- * work's details. The event history comes from the logs server, starting at
- * the deployment block (VITE_DEPLOY_BLOCK).
+ * work's details from the contract.
  */
 export async function getRecentWorks(
   contract: Contract,
@@ -213,18 +333,18 @@ export async function getRecentWorks(
   ]);
 
   const entries = [
-    ...originals.map((log) => ({ log: log as any, isVersion: false })),
-    ...versions.map((log) => ({ log: log as any, isVersion: true })),
+    ...originals.map((event) => ({ event, isVersion: false })),
+    ...versions.map((event) => ({ event, isVersion: true })),
   ]
     .sort(
       (a, b) =>
-        b.log.blockNumber - a.log.blockNumber || b.log.index - a.log.index
+        b.event.blockNumber - a.event.blockNumber || b.event.index - a.event.index
     )
     .slice(0, limit);
 
   return Promise.all(
-    entries.map(async ({ log, isVersion }) => {
-      const hash: string = log.args[0];
+    entries.map(async ({ event, isVersion }) => {
+      const hash = event.hash;
       const [, , sourceName, timestamp, editHistory] =
         await contract.verifyMedia(hash);
       const [status] = await contract.getDispute(hash);
@@ -258,8 +378,8 @@ export type OpenDispute = {
  * Reads DisputeRaised events, then checks each work's current status.
  */
 export async function getOpenDisputes(contract: Contract): Promise<OpenDispute[]> {
-  const logs = await findEvents("DisputeRaised");
-  const hashes = Array.from(new Set(logs.map((l) => (l as any).args[0] as string)));
+  const events = await findEvents("DisputeRaised");
+  const hashes = Array.from(new Set(events.map((e) => e.hash)));
 
   const items = await Promise.all(
     hashes.map(async (hash) => {
