@@ -93,6 +93,10 @@ function formatError(err: any): string {
       /* fall through */
     }
   }
+      if (code === "LOGS_BUSY")
+    return "The history service is busy right now. Please wait a minute and press Refresh. Checking a work still works.";
+  if (code === "LOGS_UNAVAILABLE")
+    return "We couldn't load the list right now. You can still check a work by choosing its file. Please try again in a minute.";
 
   return "Something went wrong. Please try again. If this keeps happening, refresh the page.";
 }
@@ -832,6 +836,8 @@ function RegisterPanel({
       setPendingHash(tx.hash);
       setStage("network");
       const receipt = await tx.wait(1, 180_000);
+      // Let the read-only server catch up, so the lists show the new work right away.
+      if (receipt) await waitForReadNode(receipt.blockNumber);
       setTxHash(receipt?.hash ?? tx.hash);
     } catch (err: any) {
       setError(formatError(err));

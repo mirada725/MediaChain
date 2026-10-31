@@ -39,9 +39,22 @@ export function getReadProvider() {
   return new JsonRpcProvider(RPC_URL, CHAIN_ID, { staticNetwork: true });
 }
 
-/** A read-only provider used only for searching old events (logs). */
+let logsProvider: JsonRpcProvider | null = null;
+
+/**
+ * A read-only provider used only for searching old events (logs).
+ * It tries each request once (no automatic retries) and gives up after 20 seconds.
+ * By default ethers retries a "429 Too Many Requests" answer many times, which
+ * adds even more load on a rate-limited free service and makes the page look stuck.
+ */
 export function getLogsProvider() {
-  return new JsonRpcProvider(LOGS_RPC_URL, CHAIN_ID, { staticNetwork: true });
+  if (!logsProvider) {
+    const request = new FetchRequest(LOGS_RPC_URL);
+    request.setThrottleParams({ maxAttempts: 1 });
+    request.timeout = 20_000;
+    logsProvider = new JsonRpcProvider(request, CHAIN_ID, { staticNetwork: true });
+  }
+  return logsProvider;
 }
 
 /**
