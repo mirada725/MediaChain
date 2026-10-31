@@ -1,9 +1,14 @@
-import { BrowserProvider, JsonRpcProvider } from "ethers";
+import { BrowserProvider, FetchRequest, JsonRpcProvider } from "ethers";
 
 export const RPC_URL = import.meta.env.VITE_RPC_URL ?? "http://127.0.0.1:8545";
 export const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID ?? 31337);
 export const CHAIN_NAME = import.meta.env.VITE_CHAIN_NAME ?? "Hardhat Local";
 export const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS ?? "";
+
+// A separate server for searching old events. Free public RPCs often delete old
+// logs ("pruned history"), so on Sepolia this points to an indexing service that
+// keeps the full history. If it is not set, the normal RPC is used.
+export const LOGS_RPC_URL = import.meta.env.VITE_LOGS_RPC_URL || RPC_URL;
 
 // Block explorer base address, without a trailing slash. Empty on the local chain.
 export const EXPLORER_URL = String(import.meta.env.VITE_EXPLORER_URL ?? "").replace(/\/$/, "");
@@ -32,6 +37,41 @@ export function addressUrl(address: string): string | null {
  */
 export function getReadProvider() {
   return new JsonRpcProvider(RPC_URL, CHAIN_ID, { staticNetwork: true });
+}
+
+let logsProvider: JsonRpcProvider | null = null;
+
+/**
+ * A read-only provider used only for searching old events (logs).
+ * It tries each request once (no automatic retries) and gives up after 20 seconds.
+ * By default ethers retries a "429 Too Many Requests" answer many times, which
+ * adds even more load on a rate-limited free service and makes the page look stuck.
+ */
+export function getLogsProvider() {
+  if (!logsProvider) {
+    const request = new FetchRequest(LOGS_RPC_URL);
+    request.setThrottleParams({ maxAttempts: 1 });
+    request.timeout = 20_000;
+    logsProvider = new JsonRpcProvider(request, CHAIN_ID, { staticNetwork: true });
+  }
+  return logsProvider;
+}
+
+/**
+ * After a transaction is confirmed, the read-only RPC may still be a block behind
+ * the wallet's RPC. Wait until it has reached the transaction's block, so the
+ * screen does not show old data. Gives up after about 15 seconds.
+ */
+export async function waitForReadNode(blockNumber: number): Promise<void> {
+  const provider = getReadProvider();
+  for (let i = 0; i < 15; i++) {
+    try {
+      if ((await provider.getBlockNumber()) >= blockNumber) return;
+    } catch {
+      // ignore a failed read and try again
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
 }
 
 /**
@@ -82,22 +122,5 @@ async function ensureNetwork(eth: any) {
     } else {
       throw err;
     }
-  }
-}
-
-/**
- * After a transaction is confirmed, the read-only RPC may still be a block behind
- * the wallet's RPC. Wait until it has reached the transaction's block, so the
- * screen does not show old data. Gives up after about 15 seconds.
- */
-export async function waitForReadNode(blockNumber: number): Promise<void> {
-  const provider = getReadProvider();
-  for (let i = 0; i < 15; i++) {
-    try {
-      if ((await provider.getBlockNumber()) >= blockNumber) return;
-    } catch {
-      // ignore a failed read and try again
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }
