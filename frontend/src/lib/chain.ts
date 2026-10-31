@@ -5,6 +5,11 @@ export const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID ?? 31337);
 export const CHAIN_NAME = import.meta.env.VITE_CHAIN_NAME ?? "Hardhat Local";
 export const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS ?? "";
 
+// A separate server for searching old events. Free public RPCs often delete old
+// logs ("pruned history"), so on Sepolia this points to an indexing service that
+// keeps the full history. If it is not set, the normal RPC is used.
+export const LOGS_RPC_URL = import.meta.env.VITE_LOGS_RPC_URL || RPC_URL;
+
 // Block explorer base address, without a trailing slash. Empty on the local chain.
 export const EXPLORER_URL = String(import.meta.env.VITE_EXPLORER_URL ?? "").replace(/\/$/, "");
 
@@ -32,6 +37,28 @@ export function addressUrl(address: string): string | null {
  */
 export function getReadProvider() {
   return new JsonRpcProvider(RPC_URL, CHAIN_ID, { staticNetwork: true });
+}
+
+/** A read-only provider used only for searching old events (logs). */
+export function getLogsProvider() {
+  return new JsonRpcProvider(LOGS_RPC_URL, CHAIN_ID, { staticNetwork: true });
+}
+
+/**
+ * After a transaction is confirmed, the read-only RPC may still be a block behind
+ * the wallet's RPC. Wait until it has reached the transaction's block, so the
+ * screen does not show old data. Gives up after about 15 seconds.
+ */
+export async function waitForReadNode(blockNumber: number): Promise<void> {
+  const provider = getReadProvider();
+  for (let i = 0; i < 15; i++) {
+    try {
+      if ((await provider.getBlockNumber()) >= blockNumber) return;
+    } catch {
+      // ignore a failed read and try again
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
 }
 
 /**
@@ -82,22 +109,5 @@ async function ensureNetwork(eth: any) {
     } else {
       throw err;
     }
-  }
-}
-
-/**
- * After a transaction is confirmed, the read-only RPC may still be a block behind
- * the wallet's RPC. Wait until it has reached the transaction's block, so the
- * screen does not show old data. Gives up after about 15 seconds.
- */
-export async function waitForReadNode(blockNumber: number): Promise<void> {
-  const provider = getReadProvider();
-  for (let i = 0; i < 15; i++) {
-    try {
-      if ((await provider.getBlockNumber()) >= blockNumber) return;
-    } catch {
-      // ignore a failed read and try again
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }

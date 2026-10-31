@@ -1,6 +1,13 @@
 import { Contract, Interface, type Signer, type Provider } from "ethers";
 import artifact from "../contract-abi.json";
-import { CONTRACT_ADDRESS, DEPLOY_BLOCK } from "./chain";
+import {
+  CONTRACT_ADDRESS,
+  DEPLOY_BLOCK,
+  LOGS_RPC_URL,
+  RPC_URL,
+  getLogsProvider,
+  getReadProvider,
+} from "./chain";
 
 
 // Matches your MediaRegistry.sol exactly (registerMedia, verifyMedia,
@@ -38,23 +45,76 @@ export const ZERO_HASH =
   "0x0000000000000000000000000000000000000000000000000000000000000000".slice(0, 66);
 
 /**
- * Free public RPC servers often refuse a log search that covers too many blocks.
- * So we search in small pieces, from the deployment block up to the latest block.
+ * Event searches are split into pieces of this many blocks, because servers
+ * often refuse one search that covers too many blocks.
  */
 const LOG_CHUNK = 5000;
 
-async function queryInChunks(contract: Contract, filter: any): Promise<any[]> {
-  const provider = contract.runner?.provider;
-  if (!provider) {
-    throw new Error("No provider available to read events.");
+/**
+ * The newest blocks are also searched on the normal RPC. The indexing service
+ * can be a little behind the chain, so this makes a brand new registration
+ * show up in the lists straight away.
+ */
+const RECENT_WINDOW = 1000;
+
+/** Thrown when the event history cannot be read from the logs server. */
+export class LogsUnavailableError extends Error {
+  code = "LOGS_UNAVAILABLE";
+  constructor() {
+    super("Event history is unavailable.");
   }
-  const latest = await provider.getBlockNumber();
+}
+
+async function searchRange(
+  contract: Contract,
+  eventName: string,
+  from: number,
+  to: number
+): Promise<any[]> {
   const logs: any[] = [];
-  for (let from = DEPLOY_BLOCK; from <= latest; from += LOG_CHUNK) {
-    const to = Math.min(from + LOG_CHUNK - 1, latest);
-    const part = await contract.queryFilter(filter, from, to);
-    logs.push(...part);
+  for (let start = from; start <= to; start += LOG_CHUNK) {
+    const end = Math.min(start + LOG_CHUNK - 1, to);
+    logs.push(...(await contract.queryFilter(eventName, start, end)));
   }
+  return logs;
+}
+
+/**
+ * Finds every log of one event, from the deployment block to the latest block.
+ * The full history comes from the logs server (VITE_LOGS_RPC_URL). The newest
+ * blocks are added from the normal RPC when the two servers are different.
+ */
+async function findEvents(eventName: string): Promise<any[]> {
+  const latest = await getReadProvider().getBlockNumber();
+
+  const history = new Contract(CONTRACT_ADDRESS, ABI, getLogsProvider());
+  let logs: any[];
+  try {
+    logs = await searchRange(history, eventName, DEPLOY_BLOCK, latest);
+  } catch (err) {
+    console.error(err); // technical details stay in the browser console
+    throw new LogsUnavailableError();
+  }
+
+  if (LOGS_RPC_URL !== RPC_URL) {
+    try {
+      const recent = new Contract(CONTRACT_ADDRESS, ABI, getReadProvider());
+      const from = Math.max(DEPLOY_BLOCK, latest - RECENT_WINDOW);
+      const extra = await searchRange(recent, eventName, from, latest);
+      const seen = new Set(logs.map((l) => `${l.transactionHash}-${l.index}`));
+      for (const log of extra) {
+        const key = `${log.transactionHash}-${log.index}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          logs.push(log);
+        }
+      }
+    } catch {
+      // Best effort only. The history above is already complete up to what the
+      // logs server has indexed.
+    }
+  }
+
   return logs;
 }
 
@@ -140,16 +200,16 @@ export type RecentWork = {
 
 /**
  * Reads registration events from the chain, newest first, and fills in each
- * work's details. The search starts at the deployment block (VITE_DEPLOY_BLOCK)
- * and runs in small pieces, so it also works on a free public RPC.
+ * work's details. The event history comes from the logs server, starting at
+ * the deployment block (VITE_DEPLOY_BLOCK).
  */
 export async function getRecentWorks(
   contract: Contract,
   limit = 20
 ): Promise<RecentWork[]> {
   const [originals, versions] = await Promise.all([
-    queryInChunks(contract, contract.filters.MediaRegistered()),
-    queryInChunks(contract, contract.filters.MediaVersionRegistered()),
+    findEvents("MediaRegistered"),
+    findEvents("MediaVersionRegistered"),
   ]);
 
   const entries = [
@@ -196,10 +256,9 @@ export type OpenDispute = {
 /**
  * Finds every work whose dispute is still open, oldest first.
  * Reads DisputeRaised events, then checks each work's current status.
- * The search starts at the deployment block and runs in small pieces.
  */
 export async function getOpenDisputes(contract: Contract): Promise<OpenDispute[]> {
-  const logs = await queryInChunks(contract, contract.filters.DisputeRaised());
+  const logs = await findEvents("DisputeRaised");
   const hashes = Array.from(new Set(logs.map((l) => (l as any).args[0] as string)));
 
   const items = await Promise.all(
