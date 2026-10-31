@@ -525,7 +525,7 @@ function VerifyPanel({
             {/* ADDITION 2: share link button and link-mode hint */}
             {result.exists && (
               <>
-                <button className="btn btn-ghost" onClick={copyLink}>
+                <button className="btn btn-primary" onClick={copyLink}>
                   {copied ? "Link copied" : "Copy share link"}
                 </button>
                 {!file && (
