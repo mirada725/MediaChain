@@ -45,6 +45,7 @@ jobs:
           VITE_CHAIN_NAME: ${{ vars.VITE_CHAIN_NAME }}
           VITE_EXPLORER_URL: ${{ vars.VITE_EXPLORER_URL }}
           VITE_DEPLOY_BLOCK: ${{ vars.VITE_DEPLOY_BLOCK }}
+          VITE_LOGS_RPC_URL: ${{ vars.VITE_LOGS_RPC_URL }}
         run: npm run build
 
       - name: Upload the built site
